@@ -104,6 +104,23 @@ const redisConnectionsActive = new client.Gauge({
   },
 });
 
+// #730 — Gauge: browsers currently holding an open SSE status stream. Spikes
+// alongside rising RSS would indicate clients are not being released on
+// disconnect; a healthy deployment tracks concurrent dashboard users.
+let sseClientCountFn = null;
+
+function setSseClientSource(fn) {
+  sseClientCountFn = typeof fn === 'function' ? fn : null;
+}
+
+const sseClientsConnected = new client.Gauge({
+  name: 'stellar_tags_sse_clients_connected',
+  help: 'Number of currently connected SSE (Server-Sent Events) clients',
+  collect() {
+    this.set(sseClientCountFn ? sseClientCountFn() : 0);
+  },
+});
+
 /**
  * Express middleware that tracks request count and latency.
  * Attach to app BEFORE route handlers.
@@ -152,9 +169,11 @@ module.exports = {
   getMetrics,
   getContentType,
   setMetricsSources,
+  setSseClientSource,
   dbPoolConnectionsOpen,
   dbPoolConnectionsBusy,
   dbPoolConnectionsIdle,
   dbPoolQueriesWaiting,
   redisConnectionsActive,
+  sseClientsConnected,
 };

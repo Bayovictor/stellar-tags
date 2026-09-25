@@ -8,6 +8,8 @@ const { paymentIntentSchema, bulkPaymentSchema } = require('../../schemas/paymen
 const { StrKey } = require('@stellar/stellar-sdk');
 const { logger } = require('../../logger');
 const { idempotencyMiddleware } = require('../../../middleware/idempotency');
+// #730 — Push real-time payment status updates to SSE subscribers.
+const { publishEvent } = require('../../services/sseService');
 
 module.exports = (redisClient) => {
   const router = express.Router();
@@ -64,6 +66,26 @@ module.exports = (redisClient) => {
     }));
 
     const created = await prisma.$transaction(createOps);
+
+    // #730 — Stream each newly registered payment intent to SSE subscribers
+    // as a `payment.created` (pending) status event. Delivery failures are
+    // contained inside the hub and never fail the HTTP request.
+    for (const intent of created) {
+      publishEvent('payment.created', {
+        payment_id: intent.id,
+        external_id: intent.externalId,
+        from: intent.from,
+        to: intent.to,
+        amount: intent.amount,
+        asset: intent.asset,
+        memo_type: intent.memoType,
+        memo: intent.memo,
+        status: intent.status || 'pending',
+        created_at: intent.createdAt instanceof Date
+          ? intent.createdAt.toISOString()
+          : intent.createdAt,
+      });
+    }
 
     return res.status(201).json({ ok: true, count: created.length, data: created.map((c) => ({ id: c.id, external_id: c.externalId })) });
   } catch (error) {

@@ -9,6 +9,8 @@ const exportRoutes = require('./exportRoutes');
 const paymentRoutes = require('./paymentRoutes');
 const contractRoutes = require('./contractRoutes');
 const federationRoutes = require('./federationRoutes');
+// #730 — SSE endpoints for real-time payment status updates.
+const sseRoutes = require('./sseRoutes');
 
 module.exports = (redisClient) => {
   const router = express.Router();
@@ -26,6 +28,7 @@ module.exports = (redisClient) => {
   router.use('/', statsRoutes(redisClient));
   router.use('/', federationRoutes(redisClient));
   router.use('/', adminRoutes);
+  router.use('/', sseRoutes(redisClient));
 
   return router;
 };

@@ -31,6 +31,7 @@ const {
   getMetrics,
   getContentType,
   setMetricsSources,
+  setSseClientSource,
 } = require("./src/metrics");
 const { validateSchema } = require("./src/middleware/validateSchema");
 const {
@@ -78,6 +79,8 @@ const {
   shouldFallbackToLocalRegistry,
 } = require("./src/utils");
 const { getCachedApprovedOrigins } = require("./src/originCache");
+// #730 — SSE hub for real-time payment status updates.
+const sseService = require("./src/services/sseService");
 
 dotenv.config();
 
@@ -212,6 +215,8 @@ if (redisClient) {
 }
 
 setMetricsSources({ prisma, redisClient });
+// #730 — Report live SSE connection count to Prometheus.
+setSseClientSource(sseService.getClientCount);
 
 const v1Router = require("./src/routes/v1")(redisClient);
 const v2Router = require("./src/routes/v2")(redisClient);
@@ -342,8 +347,18 @@ const rejectNestedObjects = (req, res, next) => {
 
 app.use(rejectNestedObjects);
 
-// Enable HTTP response compression for responses exceeding 1KB (1024 bytes)
-app.use(compression({ threshold: 1024 }));
+// Enable HTTP response compression for responses exceeding 1KB (1024 bytes).
+// text/event-stream is excluded — compressing/buffering an SSE stream delays
+// every event until the compression buffer fills, defeating real-time delivery.
+app.use(
+  compression({
+    threshold: 1024,
+    filter: (req, res) =>
+      (res.getHeader("Content-Type") || "").includes("text/event-stream")
+        ? false
+        : compression.filter(req, res),
+  }),
+);
 
 scheduleCleanupJob(prisma);
 scheduleSoftDeletePurgeJob(prisma);
@@ -1376,6 +1391,10 @@ const gracefulShutdown = (server, prismaClient, signal, redis = null) => {
   // the shutdown window.
   poolMonitor.stop();
 
+  // #730 — Close SSE streams first so browsers reconnect (with backoff) to
+  // another instance instead of waiting on a dying process.
+  sseService.closeAllClients();
+
   const timer = setTimeout(() => {
     logger.error(
       `Graceful shutdown timed out after ${SHUTDOWN_TIMEOUT_MS / 1000}s, forcing exit.`,
@@ -1397,6 +1416,7 @@ const gracefulShutdown = (server, prismaClient, signal, redis = null) => {
         logger.error(err, "Error disconnecting Redis during shutdown:");
       }
     }
+    await sseService.stopRedisFanout();
     process.exit(0);
   });
 };
@@ -1411,7 +1431,6 @@ if (require.main === module) {
     const server = app.listen(PORT, "0.0.0.0", () => {
       logger.info(`Server successfully initialized on port ${PORT}`);
     });
-
     server.on("error", (e) => {
       if (e.code === "EADDRINUSE") {
         logger.error(
@@ -1429,6 +1448,10 @@ if (require.main === module) {
       gracefulShutdown(server, prisma, sig, redisClient),
     );
   };
+
+  // #730 — Enable cross-instance SSE fan-out when Redis is configured.
+  // Fire-and-forget: the hub runs local-only if Redis is unavailable.
+  sseService.startRedisFanout();
 
   // Verify the database is not out of sync with the Prisma migrations before
   // binding a port, so schema drift surfaces as a clear startup error instead

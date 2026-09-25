@@ -22,6 +22,8 @@ const {
   horizon,
   createBreaker,
 } = require('./src/services/stellarService');
+// #730 — Stream detected payments to browsers via the SSE hub.
+const { publishEvent } = require('./src/services/sseService');
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -99,6 +101,26 @@ const watchAccount = (accountId) => {
       onmessage: (payment) => {
         if (payment.type === 'payment' || payment.type_i === 1) {
           logger.info(formatPayment(payment, accountId));
+
+          // #730 — Fan the payment out to SSE subscribers. When the incoming
+          // payment is to a locally watched account, emit both a generic
+          // `payment.received` event and an account-scoped one so clients
+          // filtered by address receive exactly their own traffic.
+          publishEvent('payment.received', {
+            transaction_hash: payment.transaction_hash || null,
+            from: payment.from || null,
+            to: payment.to || accountId,
+            amount: payment.amount || null,
+            asset:
+              payment.asset_type === 'native'
+                ? 'native'
+                : `${payment.asset_code}:${payment.asset_issuer}`,
+            asset_type: payment.asset_type || 'native',
+            direction: payment.to === accountId ? 'INCOMING' : 'OUTGOING',
+            account: accountId,
+            created_at: payment.created_at || new Date().toISOString(),
+          });
+
           dispatchPaymentWebhooks({
             prisma,
             poolGetFn: poolGet,

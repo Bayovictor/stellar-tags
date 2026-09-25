@@ -3,6 +3,7 @@ import freighterApi from '@stellar/freighter-api';
 import toast from 'react-hot-toast';
 import { Client as PaymentRouterClient, networks } from '@stellar-tags/payment-router';
 import { useLatencyTracker } from '../useLatencyTracker';
+import { usePaymentEvents } from '../usePaymentEvents';
 import LatencyGauge from '../LatencyGauge';
 import NetworkBadge from '../NetworkBadge';
 import { useDebounce } from '../useDebounce';
@@ -78,6 +79,22 @@ function Dashboard({
 
   // Initialize latency tracker for real-time API monitoring
   const latencyTracker = useLatencyTracker(API_BASE);
+
+  // #730 — Live payment status updates over SSE. The browser's EventSource
+  // handles reconnection natively; we only render what arrives.
+  const paymentEvents = usePaymentEvents({
+    address: userPublicKey || null,
+  });
+  const liveStatusText =
+    paymentEvents.status === 'open'
+      ? paymentEvents.lastEvent
+        ? `Live: ${paymentEvents.lastEvent.event === 'payment.created' ? 'payment registered' : 'payment detected'} (${paymentEvents.lastEvent.data?.amount ?? ''} ${paymentEvents.lastEvent.data?.asset === 'native' ? 'XLM' : paymentEvents.lastEvent.data?.asset ?? ''})`.replace(/\s+\)/, ')')
+        : 'Live updates connected'
+      : paymentEvents.status === 'connecting'
+        ? 'Connecting to live updates…'
+        : '';
+  const liveStatusColor = paymentEvents.status === 'open' ? '#059669' : '#6B7280';
+  const liveStatusBg = paymentEvents.status === 'open' ? '#D1FAE5' : '#F3F4F6';
 
   const walletLabel = userPublicKey
     ? `Connected: ${userPublicKey.substring(0, 5)}...${userPublicKey.substring(51)}`
@@ -688,6 +705,20 @@ function Dashboard({
                     {receiveStatus.text}
                   </div>
                 )}
+              </div>
+            )}
+            {liveStatusText && (
+              <div
+                id="live-status-box"
+                style={{
+                  color: liveStatusColor,
+                  backgroundColor: liveStatusBg,
+                  marginTop: "8px",
+                  fontSize: "0.85em",
+                }}
+                title="Streamed live from the backend via Server-Sent Events"
+              >
+                {liveStatusText}
               </div>
             )}
             {status.text && (
